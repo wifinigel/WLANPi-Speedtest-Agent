@@ -1,18 +1,6 @@
 #!/usr/bin/python
 # -*- coding: latin-1 -*-
 
-'''
-
-To Do:
-    1. *** Done *** Detect if wireless connection up before start test
-    2. *** Done *** Create db table for error logs
-    3. *** Done *** Check we have IP address before test
-    5. *** Done *** Clear old logs/data after test (keep only last 7 days?)
-    6. Use different SSID profiles ?
-    7. Would be nice to find best server if possible
-    8. *** Done *** get_wireless_info needs to fail when info not available (as is an error condition)
-
-'''
  
 from __future__ import print_function
 import time
