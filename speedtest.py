@@ -11,11 +11,13 @@ import pyspeedtest
 import os
 import re
 import sys
-import requests
-import json
+#import requests
+#import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import ConfigParser
+import csv
+import os.path
 
 DEBUG = 0
 
@@ -26,6 +28,9 @@ config.read(config_file)
 
 # db file name
 DB_FILE = config.get('General', 'db_file')
+
+# Cache file name for local results that fail upload
+CACHE_FILE = config.get('General', 'cache_file')
 
 # Speedtest server
 server_name =  config.get('General', 'server_name')
@@ -106,7 +111,33 @@ def create_worksheet_if_needed(spreadsheet):
         return True
     else:
         return False
+
+def dump_result_local_csv(data_list):
+
+    # We had issues saving data to our google sheet, so we'll dump_result_local_csv
+    # in a local file and try again later
     
+    with open(CACHE_FILE, 'a') as csvfile:
+        filewriter = csv.writer(csvfile, quoting=csv.QUOTE_MINIMAL)
+        filewriter.writerow(data_list)
+
+def push_cached_results(sheet, CACHE_FILE):
+    
+    # lets try and push cached results to gsheet
+    with open(CACHE_FILE, 'rb') as f:
+        reader = csv.reader(f)
+
+        for sheet_row_data in reader:
+            append_result = sheet.append_row(sheet_row_data)
+            if DEBUG:
+                print("Result of spreadsheet append operation from cache: " + str(append_result))
+        
+            if type(append_result) is not dict:     
+                log_error("Append operation from cache appears to have failed (should be dict: " + str(append_result))
+                return False
+        
+        # all must have been OK, return True
+        return True
 
 def lock_db(DB_FILE):
 
@@ -145,7 +176,6 @@ def log_error(err_msg):
     db_conn = sqlite3.connect(DB_FILE)
     
     cleartext_date = datetime.datetime.now()
-    #db_conn.execute("insert into error_logs (timestamp, error_msg) values (?,?)", (int(time.time()), err_msg))
     db_conn.execute("insert into error_logs (timestamp, cleartext_date, error_msg) values (?,?,?)", (int(time.time()), cleartext_date, err_msg))
     db_conn.commit()
         
@@ -340,7 +370,7 @@ def main():
     if DEBUG:
         print(r)
     
-    # check if we ned to create new sheet (new day?)
+    # check if we need to create new sheet (new day?)
     global todays_worksheet_name
     create_worksheet_if_needed(todays_worksheet_name)
     
@@ -350,16 +380,21 @@ def main():
     sheet_row_data = [current_timestamp] + r + [server_name]
     if DEBUG:
         print(sheet_row_data)
-    '''
-    Need to add check here to verify that row append actually works - tuple
-    returned, but not sure of contents. Use this to track what has been 
-    successfully added to sheet and maybe recover failed additions during later
-    attempts (this could happen in stance of very slow responses and would be
-    useful to know after the event)
-    '''
+
+    # open the sheet and try to post results (cache locally if fails)
     sheet = open_gspread_worksheet(spreadsheet_name, todays_worksheet_name)
     
     if sheet != False:
+    
+        # Let's check to see if we have any old cached results to push before we
+        # post latest result to gspread
+        if os.path.exists(CACHE_FILE):
+        
+            # If successful, remove cache file
+            if push_cached_results(sheet, CACHE_FILE) == True:
+                os.remove(CACHE_FILE)
+    
+        # post latest result    
         append_result = sheet.append_row(sheet_row_data)
         if DEBUG:
             print("Result of spreadsheet append operation: " + str(append_result))
@@ -367,7 +402,12 @@ def main():
         
         if type(append_result) is not dict:
             log_error("Append operation on sheet appears to have failed (should be dict: " + str(append_result))
-        
+            # something went wrong with append operation - cache locally
+            dump_result_local_csv(sheet_row_data)
+            
+    else:
+        # something went wrong with sheet opening operation - cache result locally
+        dump_result_local_csv(sheet_row_data)
     
     # create DB lock file        
     lock_db(DB_FILE)
@@ -376,8 +416,6 @@ def main():
     # Tidy up old data
     db_conn.execute("delete from speedtest_data where datetime(timestamp, 'unixepoch') <= date('now', '-7 days')")
     db_conn.commit()
-     
-    #db_conn.execute("insert into speedtest_data (timestamp, ping_time, download_rate, upload_rate, ssid, bssid, freq, bit_rate, signal_level, ip_address) values (?,?,?,?,?,?,?,?,?,?)", (int(time.time()), r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8]))
     
     cleartext_date = datetime.datetime.now()
     
