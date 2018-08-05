@@ -11,8 +11,6 @@ import pyspeedtest
 import os
 import re
 import sys
-#import requests
-#import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import ConfigParser
@@ -35,12 +33,24 @@ CACHE_FILE = config.get('General', 'cache_file')
 # Speedtest server
 server_name =  config.get('General', 'server_name')
 
+# WLAN interface name
+wlan_if = config.get('General', 'wlan_if')
 
+# check platform
+platform = "wlanpi"
+
+platform_info = subprocess.check_output("/bin/uname -a 2>&1", shell=True)
+
+if ("raspberry" in platform_info):
+    platform = "pi"
+
+if DEBUG:    
+    print("Platform = " + platform)
+  
 # Google sheet config parameters
 spreadsheet_name = "Speedtester-DB"
-worksheet_name = "Sheet1"
 todays_worksheet_name = time.strftime("%d-%b-%Y")
-oldest_sheet = 5
+oldest_sheet = 14
 
 
 ###############################################################################
@@ -229,13 +239,13 @@ def get_wireless_info():
     This function will look for various pieces of information from the 
     wireless adapter which will be bundles with the speedtest results.
     
-    It is a wrapper around the "iwconfig wlan0", so will no doubt break at
+    It is a wrapper around the "iwconfig wlanx", so will no doubt break at
     some stage. 
     
     '''
  
     # Get some wireless link info
-    iwconfig_info = subprocess.check_output("/sbin/iwconfig wlan0 2>&1", shell=True)
+    iwconfig_info = subprocess.check_output("/sbin/iwconfig " + wlan_if + " 2>&1", shell=True)
     
     if DEBUG:
         print(iwconfig_info)
@@ -258,7 +268,7 @@ def get_wireless_info():
         print(ssid)
     
     # Extract BSSID (Note that if WLAN adapter not associated, "Access Point: Not-Associated")
-    ssid_re = re.search('Access Point\: (..\:..\:..\:..\:..\:..)', iwconfig_info)
+    ssid_re = re.search('Access Point[\=|\:] (..\:..\:..\:..\:..\:..)', iwconfig_info)
     if ssid_re is None:
         bssid = "NA"
     else:            
@@ -268,7 +278,7 @@ def get_wireless_info():
         print(bssid)
     
     # Extract Frequency
-    ssid_re = re.search('Frequency\:(\d+\.\d+) ', iwconfig_info)
+    ssid_re = re.search('Frequency[\:|\=](\d+\.\d+) ', iwconfig_info)
     if ssid_re is None:
         freq = "NA"
     else:        
@@ -278,7 +288,7 @@ def get_wireless_info():
         print(freq)
     
     # Extract Bit Rate (e.g. Bit Rate=144.4 Mb/s)
-    ssid_re = re.search('Bit Rate\=([\d|\.]+) ', iwconfig_info)
+    ssid_re = re.search('Bit Rate[\=|\:]([\d|\.]+) ', iwconfig_info)
     if ssid_re is None:
         bit_rate = "NA"
     else:        
@@ -289,7 +299,7 @@ def get_wireless_info():
     
     
     # Extract Signal Level
-    ssid_re = re.search('Signal level\=(.+?) ', iwconfig_info)
+    ssid_re = re.search('Signal level[\=|\:](.+?) ', iwconfig_info)
     if ssid_re is None:
         signal_level = "NA"
     else:
@@ -303,13 +313,13 @@ def get_wireless_info():
 def get_adapter_ip():
     
     # Get wireless adapter ip info
-    ifconfig_info = subprocess.check_output("/sbin/ifconfig wlan0 2>&1", shell=True)
+    ifconfig_info = subprocess.check_output("/sbin/ifconfig " + wlan_if + " 2>&1", shell=True)
     
     if DEBUG:
         print(ifconfig_info)
     
     # Extract IP address info (e.g. inet 10.255.250.157)
-    ip_re = re.search('inet (\d+\.\d+\.\d+\.\d+)', ifconfig_info)
+    ip_re = re.search('inet addr[ |\:](\d+\.\d+\.\d+\.\d+)', ifconfig_info)
     if ip_re is None:
         ip_addr = "NA"
     else:            
@@ -325,6 +335,14 @@ def get_adapter_ip():
     
     return ip_addr
 
+def bounce_wlan_interface():
+
+    if platform == 'wlanpi':
+        subprocess.call("nmcli radio wifi off", shell=True)
+        subprocess.call("nmcli radio wifi on", shell=True)
+    elif platform == 'raspberry':
+        subprocess.call("sudo ifdown " + wlan_if, shell=True)
+        subprocess.call("sudo ifup " + wlan_if, shell=True)
 ###############################################################################
 # Main
 ###############################################################################
@@ -340,8 +358,7 @@ def main():
     if wireless_info[1] == 'NA':
         log_error("Problem with wireless connection: not associated to network")
         log_error("Attempting to recover by bouncing wireless interface...")
-        subprocess.call("nmcli radio wifi off", shell=True)
-        subprocess.call("nmcli radio wifi on", shell=True)
+        bounce_wlan_interface()
         sys.exit()
     
     
@@ -354,8 +371,7 @@ def main():
     if wireless_ip == 'NA':
         log_error("Problem with wireless connection: no valid IP address")
         log_error("Attempting to recover by bouncing wireless interface...")
-        subprocess.call("nmcli radio wifi off", shell=True)
-        subprocess.call("nmcli radio wifi on", shell=True)
+        bounce_wlan_interface()
         sys.exit()
 
     
