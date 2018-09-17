@@ -1,6 +1,5 @@
 #!/usr/bin/python
 # -*- coding: latin-1 -*-
-
  
 from __future__ import print_function
 import time
@@ -31,17 +30,13 @@ DB_FILE = config.get('General', 'db_file')
 CACHE_FILE = config.get('General', 'cache_file')
 
 # Speedtest server
-server_name =  config.get('General', 'server_name')
+server_name =  config.get('Server', 'server_name')
 
 # WLAN interface name
 wlan_if = config.get('General', 'wlan_if')
 
-# check platform
-platform = "wlanpi" # default platform
-platform_info = subprocess.check_output("/bin/uname -a 2>&1", shell=True)
-
-if ("raspberry" in platform_info):
-    platform = "rpi"
+# Get platform architecture
+platform = config.get('General', 'platform')
 
 if DEBUG:    
     print("Platform = " + platform)
@@ -53,10 +48,8 @@ if DEBUG:
     print("Hostname = " + hostname)
 
 # Google sheet config parameters
-spreadsheet_name = "Speedtester-DB"
+spreadsheet_name = config.get('General', 'spreadsheet_name')
 todays_worksheet_name = time.strftime("%d-%b-%Y")
-oldest_sheet = 14
-
 
 ###############################################################################
 def open_gspread_spreadsheet(spreadsheet_name):
@@ -187,7 +180,7 @@ def log_error(err_msg):
             print("Error : " + err_msg)
 
     # create DB lock file        
-    lock_db(DB_FILE)
+    #lock_db(DB_FILE)
     db_conn = sqlite3.connect(DB_FILE)
     
     cleartext_date = datetime.datetime.now()
@@ -196,7 +189,7 @@ def log_error(err_msg):
         
     # close db connection
     db_conn.close()
-    unlock_db(DB_FILE)
+    #unlock_db(DB_FILE)
 
    
 
@@ -324,7 +317,7 @@ def get_adapter_ip():
         print(ifconfig_info)
     
     # Extract IP address info (e.g. inet 10.255.250.157)
-    ip_re = re.search('inet addr[ |\:](\d+\.\d+\.\d+\.\d+)', ifconfig_info)
+    ip_re = re.search('inet .*?(\d+\.\d+\.\d+\.\d+)', ifconfig_info)
     if ip_re is None:
         ip_addr = "NA"
     else:            
@@ -431,7 +424,7 @@ def main():
         dump_result_local_csv(sheet_row_data)
     
     # create DB lock file        
-    lock_db(DB_FILE)
+    #lock_db(DB_FILE)
     db_conn = sqlite3.connect(DB_FILE)
     
     # Tidy up old data
@@ -449,7 +442,7 @@ def main():
         
     # close db connection
     db_conn.close()
-    unlock_db(DB_FILE)
+    #unlock_db(DB_FILE)
 
     
 if __name__ == "__main__":
