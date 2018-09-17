@@ -37,16 +37,21 @@ server_name =  config.get('General', 'server_name')
 wlan_if = config.get('General', 'wlan_if')
 
 # check platform
-platform = "wlanpi"
-
+platform = "wlanpi" # default platform
 platform_info = subprocess.check_output("/bin/uname -a 2>&1", shell=True)
 
 if ("raspberry" in platform_info):
-    platform = "pi"
+    platform = "rpi"
 
 if DEBUG:    
     print("Platform = " + platform)
-  
+
+# Figure out our hostname
+hostname = subprocess.check_output("/bin/hostname", shell=True)
+
+if DEBUG:    
+    print("Hostname = " + hostname)
+
 # Google sheet config parameters
 spreadsheet_name = "Speedtester-DB"
 todays_worksheet_name = time.strftime("%d-%b-%Y")
@@ -340,7 +345,7 @@ def bounce_wlan_interface():
     if platform == 'wlanpi':
         subprocess.call("nmcli radio wifi off", shell=True)
         subprocess.call("nmcli radio wifi on", shell=True)
-    elif platform == 'raspberry':
+    elif platform == 'rpi':
         subprocess.call("sudo ifdown " + wlan_if, shell=True)
         subprocess.call("sudo ifup " + wlan_if, shell=True)
 ###############################################################################
@@ -410,7 +415,7 @@ def main():
             if push_cached_results(sheet, CACHE_FILE) == True:
                 os.remove(CACHE_FILE)
     
-        # post latest result    
+        # post latest result to worksheet    
         append_result = sheet.append_row(sheet_row_data)
         if DEBUG:
             print("Result of spreadsheet append operation: " + str(append_result))
@@ -422,7 +427,7 @@ def main():
             dump_result_local_csv(sheet_row_data)
             
     else:
-        # something went wrong with sheet opening operation - cache result locally
+        # something went wrong with sheet opening operation - cache result locally for next time
         dump_result_local_csv(sheet_row_data)
     
     # create DB lock file        
