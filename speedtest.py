@@ -16,123 +16,105 @@ import ConfigParser
 import csv
 import os.path
 
+# our modules...
+from wirelessadapter import *
+from gsheet import *
+from simplelogger import *
+
 DEBUG = 0
 
-# Read in config file
-config = ConfigParser.SafeConfigParser()
-config_file = os.path.dirname(os.path.realpath(__file__)) + "/config.ini"
-config.read(config_file)
+def read_config(debug):
+    '''
+    Read in the config file variables
+    '''
 
-# db file name
-DB_FILE = config.get('General', 'db_file')
-
-# Cache file name for local results that fail upload
-CACHE_FILE = config.get('General', 'cache_file')
-
-# Speedtest server
-server_name =  config.get('Server', 'server_name')
-
-# WLAN interface name
-wlan_if = config.get('General', 'wlan_if')
-
-# Get platform architecture
-platform = config.get('General', 'platform')
-
-if DEBUG:    
-    print("Platform = " + platform)
-
-# Figure out our hostname
-hostname = subprocess.check_output("/bin/hostname", shell=True)
-
-if DEBUG:    
-    print("Hostname = " + hostname)
-
-# Google sheet config parameters
-spreadsheet_name = config.get('General', 'spreadsheet_name')
-todays_worksheet_name = time.strftime("%d-%b-%Y")
-
-###############################################################################
-def open_gspread_spreadsheet(spreadsheet_name):
-
-    try:
-        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-        credentials = ServiceAccountCredentials.from_json_keyfile_name(config.get('General', 'json_keyfile'), scope)
-        client = gspread.authorize(credentials)
-        spreadsheet = client.open(spreadsheet_name)
-        return spreadsheet
-    except Exception as ex:
-        log_error("Error opening Google spreadsheet: " + str(ex))
-        return False
-
-def open_gspread_worksheet(spreadsheet_name, worksheet_name):
-
-    try:
-        spreadsheet = open_gspread_spreadsheet(spreadsheet_name)
-        worksheet = spreadsheet.worksheet(worksheet_name)
-        return worksheet
-    except Exception as ex:
-        log_error("Error opening Google worksheet: " + str(ex))
-        return False
-
-def create_worksheet_if_needed(spreadsheet):
-
-    global spreadsheet_name
-
-    todays_worksheet_name = time.strftime("%d-%b-%Y")
+    config_vars = {}
     
-    # have a look to see if the sheet already exists
-    spreadsheet = open_gspread_spreadsheet(spreadsheet_name)
-    
-    # get a list of the worksheet names
-    worksheet_list = spreadsheet.worksheets()
-    
-    # 
-    worksheet_titles = []
-    for sheet_instance in worksheet_list:
+    config = ConfigParser.SafeConfigParser()
+    config_file = os.path.dirname(os.path.realpath(__file__)) + "/config.ini"
+    config.read(config_file)
 
-        worksheet_titles.append(sheet_instance.title)
+    # db file name
+    config_vars['db_file'] = config.get('General', 'db_file')
+
+    # create logging object
+    logger = SimpleLogger(config_vars['db_file'], debug)
+
+    # Cache file name for local results that fail upload
+    config_vars['cache_file'] = config.get('General', 'cache_file')
+
+    # Speedtest server
+    config_vars['server_name'] =  config.get('Server', 'server_name')
+
+    # WLAN interface name
+    config_vars['wlan_if'] = config.get('General', 'wlan_if')
+
+    # Get platform architecture
+    config_vars['platform'] = config.get('General', 'platform')
     
-    # create new sheet is todays worksheet no present
-    if todays_worksheet_name not in worksheet_titles:
+    # Probe location
+    config_vars['location'] = config.get('General', 'location')
+
+    if debug:    
+        print("Platform = " + config_vars['platform'])
+
+    # Figure out our hostname
+    hostname = subprocess.check_output("/bin/hostname", shell=True)
+    config_vars['hostname'] = hostname.strip()
     
-        try:
-            worksheet = spreadsheet.add_worksheet(todays_worksheet_name, 600, 26)
-        except Exception as ex:
-            log_error("Error adding new worksheet: " + str(ex))
-            return False
+    if debug:    
+        print("Hostname = " + config_vars['hostname'])
+
+    # Google sheet config parameters
+    config_vars['spreadsheet_name'] = config.get('General', 'spreadsheet_name')
+    config_vars['json_keyfile'] = config.get('General', 'json_keyfile')
+    
+    return (config_vars, logger)
+
+def dump_result_local_csv(data_list, cache_file, db_file):
+
+    '''
+    We had issues saving data to our google sheet, so we'll dump_result_local_csv in a local file and try again later
+    
+    Fields: timestamp, ping_time, download_rate, upload_rate, ssid, bssid, freq, bit_rate, signal_level, ip_address, speedtest_server, location
+    
+    '''
+
+    '''
+    db_conn = sqlite3.connect(db_file)
+
+    # add data to db
+    db_conn.execute("insert into cached_results (timestamp, ping_time, download_rate, upload_rate, ssid, bssid, freq, bit_rate, signal_level, ip_address, speedtest_server, location) values (?,?,?,?,?,?,?,?,?,?,?,?)", data_list)
+    db_conn.commit()
+    
+    # Tidy up cache entries - keep only last 20
+    db_conn.execute("delete from cached_results where id not in (select id from cached_results order by id desc limit 20)")
+    db_conn.commit()
         
-        col_headers = ["timestamp","ping_time (ms)","download_rate (mbps)","upload_rate (mbps)", "ssid","bssid","freq","bit_rate","signal_level","ip_address","speedtest_server"]
-        
-        try:
-            append_result = worksheet.append_row(col_headers)
-        except Exception as ex:
-            log_error("Error adding col headers to new sheet: " + str(ex))
-
-        
-        if DEBUG:
-            print("Result of spreadsheet col headers append operation: " + str(append_result))
-            print("Col headers append operation result type: " + str(type(append_result)))
-            
-        if type(append_result) is not dict:
-            log_error("col headers append operation on sheet appears to have failed (should be dict: " + str(append_result))
-        
-        return True
-    else:
-        return False
-
-def dump_result_local_csv(data_list):
-
-    # We had issues saving data to our google sheet, so we'll dump_result_local_csv
-    # in a local file and try again later
+    # close db connection
+    db_conn.close()
     
-    with open(CACHE_FILE, 'a') as csvfile:
+    '''
+    
+    with open(cache_file, 'a') as csvfile:
         filewriter = csv.writer(csvfile, quoting=csv.QUOTE_MINIMAL)
         filewriter.writerow(data_list)
 
-def push_cached_results(sheet, CACHE_FILE):
+def push_cached_results(sheet, cache_file, db_file):
     
-    # lets try and push cached results to gsheet
-    with open(CACHE_FILE, 'rb') as f:
+    '''
+    Try and push cached results to gsheet - if we have lots of data to write, have to be careful not to over-run Google API and get throttled (*** Need to put pause in here***)
+    '''
+    
+    '''
+    db_conn = sqlite3.connect(db_file)
+    
+    # close db connection
+    db_conn.close()
+    '''
+    
+    
+    with open(cache_file, 'rb') as f:
         reader = csv.reader(f)
 
         for sheet_row_data in reader:
@@ -141,57 +123,12 @@ def push_cached_results(sheet, CACHE_FILE):
                 print("Result of spreadsheet append operation from cache: " + str(append_result))
         
             if type(append_result) is not dict:     
-                log_error("Append operation from cache appears to have failed (should be dict: " + str(append_result))
+                logger.log_error("Append operation from cache appears to have failed (should be dict: " + str(append_result))
                 return False
         
         # all must have been OK, return True
         return True
-
-def lock_db(DB_FILE):
-
-    '''
-    This function creates a lock file that can be used to indicate that the db
-    is in uses and that other processes should not update it
-    '''
-
-    now = str(time.time())
-    fh = open(DB_FILE + "lock", "w+")
-    fh.write(now)
-    fh.close()
-
-def unlock_db(DB_FILE):
-
-    '''
-    This function removes a lock file that can be used to indicate that the db
-    is in uses and that other processes should not update it
-    '''
-    
-    if os.path.exists(DB_FILE + "lock"):
-        os.remove(DB_FILE + "lock")
-
-def log_error(err_msg):
-
-    '''
-    This function puts an error message in to the local database to indicate 
-    something has gone wrong
-    '''
-
-    if DEBUG:
-            print("Error : " + err_msg)
-
-    # create DB lock file        
-    #lock_db(DB_FILE)
-    db_conn = sqlite3.connect(DB_FILE)
-    
-    cleartext_date = datetime.datetime.now()
-    db_conn.execute("insert into error_logs (timestamp, cleartext_date, error_msg) values (?,?,?)", (int(time.time()), cleartext_date, err_msg))
-    db_conn.commit()
-        
-    # close db connection
-    db_conn.close()
-    #unlock_db(DB_FILE)
-
-   
+ 
 
 def speedtest(server_name):
 
@@ -208,17 +145,17 @@ def speedtest(server_name):
         if DEBUG:
             print("Ping time = " + str(ping_time) + " ms")
     except Exception as error:
-        log_error("Problem with ping test: " + error.message)
+        logger.log_error("Problem with ping test: " + error.message)
         sys.exit()
         
         
     try:
         download_rate = '%.2f' % (st.download()/1024000)
-        #download_rate = st.pretty_speed(st.download())
+        
         if DEBUG:
             print("Download rate = " + str(download_rate) + " Mbps")
     except Exception as error:
-        log_error("Download test error: " + error.message)
+        logger.log_error("Download test error: " + error.message)
         sys.exit()
     
     try:
@@ -226,150 +163,96 @@ def speedtest(server_name):
         if DEBUG:
             print("Upload rate = " + str(upload_rate) + " Mbps")
     except Exception as error:
-        log_error("Upload test error: " + error.message)
+        logger.log_error("Upload test error: " + error.message)
         sys.exit()
         
     return [ping_time, download_rate, upload_rate]
 
-def get_wireless_info():
 
-    '''
-    This function will look for various pieces of information from the 
-    wireless adapter which will be bundles with the speedtest results.
-    
-    It is a wrapper around the "iwconfig wlanx", so will no doubt break at
-    some stage. 
-    
-    '''
- 
-    # Get some wireless link info
-    iwconfig_info = subprocess.check_output("/sbin/iwconfig " + wlan_if + " 2>&1", shell=True)
-    
-    if DEBUG:
-        print(iwconfig_info)
-    
-    ''' 
-    We cannot assume all of the parameters below are available (sometimes
-    they are missing for some reason until device is rebooted). Only
-    provide info if they are available, otherwise replace with "NA"
+def check_config_updates(gsheet, worksheet_titles, config_vars):
 
-    '''
-    
-    # Extract SSID
-    ssid_re = re.search('ESSID\:\"(.*?)\"', iwconfig_info)
-    if ssid_re is None:
-        ssid = "NA"
-    else:            
-        ssid = ssid_re.group(1)
+    # *** under development *** Check if we have any config updates we need to apply
+    # Anything read-in needs sanity checking and cleansing...not yet done
+    if DEBUG:
+            print("Checking if we have a config sheet...")
+            
+    # Do we have a config sheet?
+    if "Config" not in worksheet_titles:
+        if DEBUG:
+            print("No config sheet found - no config read will be performed")
+        return False
     
     if DEBUG:
-        print(ssid)
+        print("Looks like we have a confg sheet - attemping to retrieve")
     
-    # Extract BSSID (Note that if WLAN adapter not associated, "Access Point: Not-Associated")
-    ssid_re = re.search('Access Point[\=|\:] (..\:..\:..\:..\:..\:..)', iwconfig_info)
-    if ssid_re is None:
-        bssid = "NA"
-    else:            
-        bssid = ssid_re.group(1)
+    # read config sheet
+    sheet = gsheet.open_gspread_worksheet("Config")
     
-    if DEBUG:
-        print(bssid)
-    
-    # Extract Frequency
-    ssid_re = re.search('Frequency[\:|\=](\d+\.\d+) ', iwconfig_info)
-    if ssid_re is None:
-        freq = "NA"
-    else:        
-        freq = ssid_re.group(1)
-    
-    if DEBUG:
-        print(freq)
-    
-    # Extract Bit Rate (e.g. Bit Rate=144.4 Mb/s)
-    ssid_re = re.search('Bit Rate[\=|\:]([\d|\.]+) ', iwconfig_info)
-    if ssid_re is None:
-        bit_rate = "NA"
-    else:        
-        bit_rate = ssid_re.group(1)
-    
-    if DEBUG:
-        print(bit_rate)
-    
-    
-    # Extract Signal Level
-    ssid_re = re.search('Signal level[\=|\:](.+?) ', iwconfig_info)
-    if ssid_re is None:
-        signal_level = "NA"
-    else:
-        signal_level = ssid_re.group(1)
+    if sheet == False:
+        return False
         
-    if DEBUG:
-        print(signal_level)
-    
-    return [ssid, bssid, freq, bit_rate, signal_level]
-
-def get_adapter_ip():
-    
-    # Get wireless adapter ip info
-    ifconfig_info = subprocess.check_output("/sbin/ifconfig " + wlan_if + " 2>&1", shell=True)
+    # read all values in to list of lists: [ [col1-row1, col2-row1], [col1-row2, col2-row2] 
+    rows = sheet.get_all_values()
     
     if DEBUG:
-        print(ifconfig_info)
+        print(rows)
     
-    # Extract IP address info (e.g. inet 10.255.250.157)
-    ip_re = re.search('inet .*?(\d+\.\d+\.\d+\.\d+)', ifconfig_info)
-    if ip_re is None:
-        ip_addr = "NA"
-    else:            
-        ip_addr = ip_re.group(1)
+    allowed_fields = ['server_name', 'location']
     
-    # Check to see if IP address is APIPA (169.254.x.x)
-    apipa_re = re.search('169\.254', ip_addr)
-    if not apipa_re is None:
-        ip_addr = "NA"
+    # Convert List of lists in to dictionary
+    for row in rows:
+        [section, parameter] = row[0].split(":")
+        
+        if parameter in allowed_fields:
+            config_vars[parameter]= row[1]
     
     if DEBUG:
-        print(ip_addr)
+        print(config_vars)
     
-    return ip_addr
+    return config_vars
 
-def bounce_wlan_interface():
-
-    if platform == 'wlanpi':
-        subprocess.call("nmcli radio wifi off", shell=True)
-        subprocess.call("nmcli radio wifi on", shell=True)
-    elif platform == 'rpi':
-        subprocess.call("sudo ifdown " + wlan_if, shell=True)
-        subprocess.call("sudo ifup " + wlan_if, shell=True)
+    
 ###############################################################################
 # Main
 ###############################################################################
     
 def main():
 
+    # read in our local config file (content in dictionary: config_vars)
+    
+    (config_vars, logger) = read_config(DEBUG)
+    
+    wlan_if = config_vars['wlan_if']
+    platform = config_vars['platform']
+    json_keyfile = config_vars['json_keyfile']
+    spreadsheet_name = config_vars['spreadsheet_name']
+    cache_file = config_vars['cache_file']
+    db_file = config_vars['db_file']
+        
     # get wireless info
-    wireless_info = get_wireless_info()
-    if DEBUG:
-        print(wireless_info)
+    adapter = WirelessAdapter(wlan_if, platform, DEBUG)
+
+    # create our Google sheets object
+    gsheet = Gsheet(json_keyfile, spreadsheet_name, logger, DEBUG)
+    
+    # modify config parameters based on config worksheet items (if exists)
+    config_vars = check_config_updates(gsheet, gsheet.get_worksheet_titles(), config_vars)
+    
+    server_name = config_vars['server_name']
+    location = config_vars['location']
     
     # if we have no network connection (i.e. no bssid), no point in proceeding...
-    if wireless_info[1] == 'NA':
-        log_error("Problem with wireless connection: not associated to network")
-        log_error("Attempting to recover by bouncing wireless interface...")
-        bounce_wlan_interface()
+    if adapter.get_bssid() == 'NA':
+        logger.log_error("Problem with wireless connection: not associated to network")
+        logger.log_error("Attempting to recover by bouncing wireless interface...")
+        adapter.bounce_wlan_interface()
         sys.exit()
     
-    
-    # get wireless adapter ip address info
-    wireless_ip = get_adapter_ip()
-    if DEBUG:
-        print(wireless_ip)
-    
     # if we have no IP address, no point in proceeding...
-    if wireless_ip == 'NA':
-        log_error("Problem with wireless connection: no valid IP address")
-        log_error("Attempting to recover by bouncing wireless interface...")
-        bounce_wlan_interface()
+    if adapter.get_ipaddr() == 'NA':
+        logger.log_error("Problem with wireless connection: no valid IP address")
+        logger.log_error("Attempting to recover by bouncing wireless interface...")
+        adapter.bounce_wlan_interface()
         sys.exit()
 
     
@@ -380,33 +263,35 @@ def main():
 
 
     # Join the results lists
-    r = speedtest_results + wireless_info + [wireless_ip]
+    r = speedtest_results + adapter.get_wireless_info() + [adapter.get_ipaddr()]
     if DEBUG:
         print(r)
     
     # check if we need to create new sheet (new day?)
-    global todays_worksheet_name
-    create_worksheet_if_needed(todays_worksheet_name)
+    
+    
+    gsheet.create_worksheet_if_needed()
     
     # Send to google sheet
     now = datetime.datetime.now()
     current_timestamp = now.strftime("%Y-%m-%d %H:%M")
-    sheet_row_data = [current_timestamp] + r + [server_name]
+    sheet_row_data = [current_timestamp] + r + [server_name] + [location]
     if DEBUG:
         print(sheet_row_data)
 
     # open the sheet and try to post results (cache locally if fails)
-    sheet = open_gspread_worksheet(spreadsheet_name, todays_worksheet_name)
+    todays_worksheet_name = gsheet.get_todays_worksheet_name()
+    sheet = gsheet.open_gspread_worksheet(todays_worksheet_name)
     
     if sheet != False:
     
         # Let's check to see if we have any old cached results to push before we
         # post latest result to gspread
-        if os.path.exists(CACHE_FILE):
+        if os.path.exists(cache_file):
         
             # If successful, remove cache file
-            if push_cached_results(sheet, CACHE_FILE) == True:
-                os.remove(CACHE_FILE)
+            if push_cached_results(sheet, cache_file, db_file) == True:
+                os.remove(cache_file)
     
         # post latest result to worksheet    
         append_result = sheet.append_row(sheet_row_data)
@@ -415,24 +300,23 @@ def main():
             print("Append operation result type: " + str(type(append_result)))
         
         if type(append_result) is not dict:
-            log_error("Append operation on sheet appears to have failed (should be dict: " + str(append_result))
+            logger.log_error("Append operation on sheet appears to have failed (should be dict: " + str(append_result))
             # something went wrong with append operation - cache locally
-            dump_result_local_csv(sheet_row_data)
+            dump_result_local_csv(sheet_row_data, cache_file, db_file)
             
     else:
         # something went wrong with sheet opening operation - cache result locally for next time
-        dump_result_local_csv(sheet_row_data)
+        dump_result_local_csv(sheet_row_data, cache_file, db_file)
     
-    # create DB lock file        
-    #lock_db(DB_FILE)
-    db_conn = sqlite3.connect(DB_FILE)
+    db_conn = sqlite3.connect(db_file)
     
-    # Tidy up old data
+    # Tidy up old data to keep db reasonable size
     db_conn.execute("delete from speedtest_data where datetime(timestamp, 'unixepoch') <= date('now', '-7 days')")
     db_conn.commit()
     
     cleartext_date = datetime.datetime.now()
     
+    # add data to db
     db_conn.execute("insert into speedtest_data (timestamp, cleartext_date, ping_time, download_rate, upload_rate, ssid, bssid, freq, bit_rate, signal_level, ip_address) values (?,?,?,?,?,?,?,?,?,?,?)", (int(time.time()), cleartext_date, r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8]))
     db_conn.commit()
     
@@ -442,8 +326,10 @@ def main():
         
     # close db connection
     db_conn.close()
-    #unlock_db(DB_FILE)
 
+###############################################################################
+# End main
+###############################################################################
     
 if __name__ == "__main__":
     main()
