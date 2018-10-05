@@ -23,6 +23,7 @@ There are a number of steps to get this running on your WLANPi:
     sudo pip install --upgrade oauth2client\
     sudo apt-get install sqlite3\
  5. Create the required environment on your WLANPi:
+    
     cd ~\
     mkdir python\
     cd ./python\\
@@ -33,6 +34,7 @@ There are a number of steps to get this running on your WLANPi:
  7. Copy the Google sheet JSON credential file in to ~/python/speedtest
  8. chmod a+x ~/python/speedtest/speedtest.py
  7. configure crontab to run the script every 5 mins:
+    
     */5 * * * * /usr/bin/python /home/wlanpi/python/speedtest/speedtest.py >> /home/wlanpi/python/speedtest/speedtest.log\
 
 (Sorry, I will document this properly one day when things are more finalized)
