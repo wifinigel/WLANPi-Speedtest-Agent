@@ -32,10 +32,10 @@ There are a number of steps to get this running on your WLANPi:
     Configure config.ini for the env\
  6. Copy the files from ths project in to ~/python/speedtest
  7. Copy the Google sheet JSON credential file in to ~/python/speedtest
- 8. chmod a+x ~/python/speedtest/speedtest.py
+ 8. chmod a+x ~/python/speedtest/speedtester.py
  7. configure crontab to run the script every 5 mins:
     
-    */5 * * * * /usr/bin/python /home/wlanpi/python/speedtest/speedtest.py >> /home/wlanpi/python/speedtest/speedtest.log\
+    */5 * * * * /usr/bin/python /home/wlanpi/python/speedtest/speedtester.py >> /home/wlanpi/python/speedtest/speedtest.log\
 
 (Sorry, I will document this properly one day when things are more finalized)
     
