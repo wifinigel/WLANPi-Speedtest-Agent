@@ -1,0 +1,43 @@
+-- 
+-- Table to store all speedtest results
+-- 
+create table speedtest_data (
+id integer primary key autoincrement,
+timestamp char(12) not null,
+cleartext_date char (30) not null,
+ping_time char(5) not null,
+download_rate char(10) not null,
+upload_rate char(10) not null,
+ssid char(64) not null,
+bssid char(17) not null,
+freq char(6) not null,
+bit_rate char(5) not null,
+signal_level char(4) not null,
+ip_address char(16) not null);
+-- 
+-- Table for all error logs
+-- 
+create table error_logs (
+id integer primary key autoincrement,
+timestamp char(12) not null,
+cleartext_date char (30) not null,
+error_msg text not null
+);
+-- 
+-- Table for cache of all failed posts to Gsheet
+-- 
+create table cached_results (
+id integer primary key autoincrement,
+timestamp char(12) not null,
+ping_time char(5) not null,
+download_rate char(10) not null,
+upload_rate char(10) not null,
+ssid char(64) not null,
+bssid char(17) not null,
+freq char(6) not null,
+bit_rate char(5) not null,
+signal_level char(4) not null,
+ip_address char(16) not null,
+location text not null
+speedtest_server char(60) not null,
+);

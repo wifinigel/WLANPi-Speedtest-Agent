@@ -1,0 +1,1 @@
+sqlite3 -header -csv ../speedtest.db "select * from speedtest_data"
