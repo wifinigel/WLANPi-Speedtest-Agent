@@ -25,7 +25,7 @@ class WirelessAdapter(object):
         self.ifconfig_info = subprocess.check_output("/sbin/ifconfig " + self.wlan_if_name + " 2>&1", shell=True)
 
         if self.debug:
-            print(self.ifconfig_info)
+            print("Interface config info: " + self.ifconfig_info)
 
         self.iwconfig_info = subprocess.check_output("/sbin/iwconfig " + self.wlan_if_name + " 2>&1", shell=True)
         
@@ -139,15 +139,22 @@ class WirelessAdapter(object):
         '''
         If we run in to connectivity issues, we may like to try bouncing the
         wireless interface to see if we can recover the connection.
+        
+        Note: wlanpi must be added to sudoers group using visudo command on RPI
         '''
-
-        if platform == 'wlanpi':
+        import subprocess
+        
+        if self.debug:
+            print("Bouncing interface (platform type = " + self.platform + ")")
+        
+        if self.platform == 'wlanpi':
             subprocess.call("nmcli radio wifi off", shell=True)
             subprocess.call("nmcli radio wifi on", shell=True)
 
-        elif platform == 'rpi':
-            subprocess.call("sudo ifdown " + wlan_if_name, shell=True)
-            subprocess.call("sudo ifup " + wlan_if_name, shell=True)
+        elif self.platform == 'rpi':
+            subprocess.call("sudo ifdown " + self.wlan_if_name, shell=True)
+            subprocess.call("sudo ifup " + self.wlan_if_name, shell=True)
+
 
     def get_ssid(self):
         return self.ssid

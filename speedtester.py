@@ -6,10 +6,8 @@ import time
 import datetime
 import sqlite3
 import subprocess
-
-#import pyspeedtest
+from socket import gethostbyname
 import speedtest
-
 import os
 import re
 import sys
@@ -24,7 +22,7 @@ from wirelessadapter import *
 from gsheet import *
 from simplelogger import *
 
-DEBUG = 0    
+DEBUG = 0
 
 def read_config(debug):
     '''
@@ -110,7 +108,7 @@ def dump_result_local_db(data_list, db_file, logger, debug):
 def push_cached_results(sheet, cache_file, db_file, debug):
     
     '''
-    Try and push cached results to gsheet - if we have lots of data to write, have to be careful not to over-run Google API and get throttled (*** Need to put pause in here***)
+    Try and push cached results to gsheet - if we have lots of data to write, have to be careful not to over-run Google API and get throttled (cached results limited to 20 in dump_result_local_db)
     '''
     
     # give us dictionary results
@@ -195,7 +193,6 @@ def ooklaspeedtest(server_name):
     ping_time = int(results_dict['ping'])
     server_name = results_dict['server']['host']
     
-    #return [ping_time, download_rate, upload_rate, server_name]
     return {'ping_time': ping_time, 'download_rate': download_rate, 'upload_rate': upload_rate, 'server_name': server_name}
 
 
@@ -241,6 +238,101 @@ def check_config_updates(gsheet, worksheet_titles, config_vars):
     
     return config_vars
 
+def update_console(gsheet, worksheet_titles, db_file, logger, DEBUG):
+
+    '''
+    If we have any error messages, send them to the console sheet
+    
+    *** Need to add tidy up to limit sheet row count to last 200 messages ***
+    
+    '''
+    # max number of rows allowed in console
+    max_rows = 100
+
+    # If we have a console sheet, upload the latest error messages to items
+    if DEBUG:
+            print("Checking if we have a console sheet...")
+            
+    # Do we have a config sheet?
+    if "Console" not in worksheet_titles:
+        if DEBUG:
+            print("No console sheet found - no logs will be reported")
+        return False
+    
+    if DEBUG:
+        print("Looks like we have a console sheet - attemping to open")
+    
+    # read config sheet
+    sheet = gsheet.open_gspread_worksheet("Console")
+    
+    if sheet == False:
+        return False
+    
+    # read latest error logs from probe
+    db_conn = sqlite3.connect(db_file)
+    
+    cursor = db_conn.cursor()
+    
+    try:
+        cursor.execute("select cleartext_date, error_msg from error_logs")
+        if DEBUG:
+            print("Checking to see if we have error logs to send to console sheet...")
+    except Exception as error:
+        print("Db execute error when trying to select error logs: " + error.message)
+        #logger.log_error("Db execute error when trying to select error logs: " + error.message)        
+    
+    # retrieve all cached data from db
+    error_log_data = cursor.fetchall()
+    
+    # clear the log table
+    try:
+        db_conn.execute("delete from error_logs")
+        db_conn.commit()
+    except Exception as error:
+        logger.log_error("Db execute error when trying to delete old error log data: " + error.message)
+    
+    last_row_number = 0
+    
+    # step through results & upload to sheet
+    for sheet_row_data in error_log_data:
+        
+        if DEBUG:
+            print("cached data row: ")
+            print(sheet_row_data)
+            
+        append_result = sheet.append_row(sheet_row_data)
+        
+        if DEBUG:
+            print("Result of spreadsheet append operation from error log: " + str(append_result))
+        
+        if type(append_result) is not dict:     
+            logger.log_error("Append operation from error log appears to have failed (should be dict: " + str(append_result))
+            return False
+
+        updated_range = append_result['updates']['updatedRange']
+        
+        row_number_re = re.search('.*?\!A(\d+)', updated_range)
+        
+        if row_number_re is None:
+            logger.log_error("Unable to extract last row number in error sheet")
+        else:
+            last_row_number = int(row_number_re.group(1))
+        
+        if DEBUG:
+            print("Last console sheet row: " + str(last_row_number))
+            
+    if last_row_number > max_rows:
+        # we need to do something here to remove rows in console sheet
+        
+        for i in range(last_row_number - max_rows):
+            sheet.delete_row(1)
+    
+    # close db connection
+    db_conn.close()
+
+    # all must have been OK, return True
+    return True
+  
     
 ###############################################################################
 # Main
@@ -264,7 +356,34 @@ def main():
         
     # get wireless info
     adapter = WirelessAdapter(wlan_if, platform, DEBUG)
-
+    
+    # if we have no network connection (i.e. no bssid), no point in proceeding...
+    if adapter.get_bssid() == 'NA':
+        logger.log_error("Problem with wireless connection: not associated to network")
+        logger.log_error("Attempting to recover by bouncing wireless interface...")
+        adapter.bounce_wlan_interface()
+        logger.log_error("Exiting...")
+        sys.exit()
+    
+    # if we have no IP address, no point in proceeding...
+    if adapter.get_ipaddr() == 'NA':
+        logger.log_error("Problem with wireless connection: no valid IP address")
+        logger.log_error("Attempting to recover by bouncing wireless interface...")
+        adapter.bounce_wlan_interface()
+        logger.log_error("Exiting...")
+        sys.exit()
+    
+    # final connectivity check: see if we can resolve an address 
+    # (network connection and DNS must be up)
+    try:
+        gethostbyname('oauth2.googleapis.com')
+    except Exception as ex:
+        logger.log_error("DNS seems to be failing, bouncing wireless interface...")
+        adapter.bounce_wlan_interface()
+        logger.log_error("Exiting...")
+        sys.exit()
+        
+    
     # create our Google sheets object
     try:
         gsheet = Gsheet(json_keyfile, spreadsheet_name, logger, DEBUG)
@@ -278,20 +397,6 @@ def main():
     
     server_name = config_vars['server_name']
     location = config_vars['location']
-    
-    # if we have no network connection (i.e. no bssid), no point in proceeding...
-    if adapter.get_bssid() == 'NA':
-        logger.log_error("Problem with wireless connection: not associated to network")
-        logger.log_error("Attempting to recover by bouncing wireless interface...")
-        adapter.bounce_wlan_interface()
-        sys.exit()
-    
-    # if we have no IP address, no point in proceeding...
-    if adapter.get_ipaddr() == 'NA':
-        logger.log_error("Problem with wireless connection: no valid IP address")
-        logger.log_error("Attempting to recover by bouncing wireless interface...")
-        adapter.bounce_wlan_interface()
-        sys.exit()
     
     # run speedtest
     speedtest_results = ooklaspeedtest(server_name)
@@ -402,6 +507,9 @@ def main():
     # close db connection
     db_conn.close()
 
+    # send error messages to console
+    update_console(gsheet, gsheet.get_worksheet_titles(), db_file, logger, DEBUG)
+    
 ###############################################################################
 # End main
 ###############################################################################
