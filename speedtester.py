@@ -21,6 +21,7 @@ import os.path
 from wirelessadapter import *
 from gsheet import *
 from simplelogger import *
+from pinger import *
 
 DEBUG = 0
 
@@ -89,7 +90,7 @@ def dump_result_local_db(data_list, db_file, logger, debug):
     
     # add data to db
     try:
-        db_conn.execute("insert into cached_results (timestamp, ping_time, download_rate, upload_rate, ssid, bssid, freq, bit_rate, signal_level, ip_address, location, speedtest_server) values (?,?,?,?,?,?,?,?,?,?,?,?)", data_list)
+        db_conn.execute("insert into cached_results (timestamp, ping_time, download_rate, upload_rate, ssid, bssid, freq, bit_rate, signal_level, ip_address, location, speedtest_server,ping_host1,pkts_tx1,percent_loss1,rtt_avg1,ping_host2,pkts_tx2,percent_loss2,rtt_avg2,ping_host3,pkts_tx3,percent_loss3,rtt_avg3) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", data_list)
         db_conn.commit()
     except Exception as error:
         logger.log_error("Db execute error when trying to dump local results: " + error.message)
@@ -105,10 +106,11 @@ def dump_result_local_db(data_list, db_file, logger, debug):
     db_conn.close()
 
 
-def push_cached_results(sheet, cache_file, db_file, debug):
+def push_cached_results(sheet, cache_file, db_file, logger, debug):
     
     '''
     Try and push cached results to gsheet - if we have lots of data to write, have to be careful not to over-run Google API and get throttled (cached results limited to 20 in dump_result_local_db)
+    
     '''
     
     # give us dictionary results
@@ -117,7 +119,7 @@ def push_cached_results(sheet, cache_file, db_file, debug):
     cursor = db_conn.cursor()
     
     try:
-        cursor.execute("select timestamp, ping_time, download_rate, upload_rate, ssid, bssid, freq, bit_rate, signal_level, ip_address, location, speedtest_server from cached_results")
+        cursor.execute("select timestamp, ping_time, download_rate, upload_rate, ssid, bssid, freq, bit_rate, signal_level, ip_address, location, speedtest_server,ping_host1,pkts_tx1,percent_loss1,rtt_avg1,ping_host2,pkts_tx2,percent_loss2,rtt_avg2,ping_host3,pkts_tx3,percent_loss3,rtt_avg3 from cached_results")
         if debug:
             print("Checking to see if we have cached data to send to google sheet...")
     except Exception as error:
@@ -156,7 +158,7 @@ def push_cached_results(sheet, cache_file, db_file, debug):
     return True
  
 
-def ooklaspeedtest(server_name):
+def ooklaspeedtest(server_name=""):
 
     '''
     This function runs the actual speedtest and returns the result
@@ -166,8 +168,45 @@ def ooklaspeedtest(server_name):
           'upload_rate': upload_rate,
           'server_name': server_name
         }
+    
+    
+    Speedtest server list format (dict):
+    19079.416816052293: [{'cc': 'NZ',
+                       'country': 'New Zealand',
+                       'd': 19079.416816052293,
+                       'host': 'speed3.snap.net.nz:8080',
+                       'id': '6056',
+                       'lat': '-45.8667',
+                       'lon': '170.5000',
+                       'name': 'Dunedin',
+                       'sponsor': '2degrees',
+                       'url': 'http://speed3.snap.net.nz/speedtest/upload.php',
+                       'url2': 'http://speed-dud.snap.net.nz/speedtest/upload.php'},
+                      {'cc': 'NZ',
+                       'country': 'New Zealand',
+                       'd': 19079.416816052293,
+                       'host': 'speedtest.wic.co.nz:8080',
+                       'id': '5482',
+                       'lat': '-45.8667',
+                       'lon': '170.5000',
+                       'name': 'Dunedin',
+                       'sponsor': 'WIC NZ Ltd',
+                       'url': 'http://speedtest.wic.co.nz/speedtest/upload.php',
+                       'url2': 'http://speedtest.wickednetworks.co.nz/speedtest/upload.php'},
+                      {'cc': 'NZ',
+                       'country': 'New Zealand',
+                       'd': 19079.416816052293,
+                       'host': 'speedtest.unifone.net.nz:8080',
+                       'id': '12037',
+                       'lat': '-45.8667',
+                       'lon': '170.5000',
+                       'name': 'Dunedin',
+                       'sponsor': 'Unifone NZ LTD',
+                       'url': 'http://speedtest.unifone.net.nz/speedtest/upload.php'}]
     '''
 
+    import sys
+    
     # perform Speedtest
     st = speedtest.Speedtest()
     st.get_best_server()
@@ -198,8 +237,16 @@ def ooklaspeedtest(server_name):
 
 def check_config_updates(gsheet, worksheet_titles, config_vars):
 
-    # *** under development *** Check if we have any config updates we need to apply
-    # Anything read-in needs sanity checking and cleansing...not yet done
+    ###########################################################################
+    # FIXME: 
+    # *** under development *** Check if we have any config updates we need to 
+    # apply. Anything read-in needs sanity checking and cleansing...not yet 
+    # done. Some being done in ping section of main to figure out if valid host
+    # host entered - probably best here
+    #
+    # Need to ensure server name undefined if field exists by no value (or)
+    # whitespace entered
+    ###########################################################################
     if DEBUG:
             print("Checking if we have a config sheet...")
             
@@ -224,7 +271,7 @@ def check_config_updates(gsheet, worksheet_titles, config_vars):
     if DEBUG:
         print(rows)
     
-    allowed_fields = ['server_name', 'location']
+    allowed_fields = ['server_name', 'location', 'ping_1', 'ping_2', 'ping_3']
     
     # Convert List of lists in to dictionary
     for row in rows:
@@ -242,17 +289,16 @@ def update_console(gsheet, worksheet_titles, db_file, logger, DEBUG):
 
     '''
     If we have any error messages, send them to the console sheet
-    
-    *** Need to add tidy up to limit sheet row count to last 200 messages ***
-    
+      
     '''
     # max number of rows allowed in console
-    max_rows = 100
+    max_rows = 50
 
     # If we have a console sheet, upload the latest error messages to items
     if DEBUG:
             print("Checking if we have a console sheet...")
-            
+    
+    # FIXME: Only open sheet if we have error messages to send
     # Do we have a config sheet?
     if "Console" not in worksheet_titles:
         if DEBUG:
@@ -279,7 +325,8 @@ def update_console(gsheet, worksheet_titles, db_file, logger, DEBUG):
             print("Checking to see if we have error logs to send to console sheet...")
     except Exception as error:
         print("Db execute error when trying to select error logs: " + error.message)
-        #logger.log_error("Db execute error when trying to select error logs: " + error.message)        
+        #logger.log_error("Db execute error when trying to select error logs: " + error.message)
+        #FIXME: Any point in carrying on here ? Should exit or return as wasting our time here...
     
     # retrieve all cached data from db
     error_log_data = cursor.fetchall()
@@ -290,6 +337,7 @@ def update_console(gsheet, worksheet_titles, db_file, logger, DEBUG):
         db_conn.commit()
     except Exception as error:
         logger.log_error("Db execute error when trying to delete old error log data: " + error.message)
+        #FIXME: Any point in carrying on here ? Should exit or return as wasting our time here...
     
     last_row_number = 0
     
@@ -332,7 +380,17 @@ def update_console(gsheet, worksheet_titles, db_file, logger, DEBUG):
 
     # all must have been OK, return True
     return True
-  
+
+def bounce_error_exit(adapter, logger, error_msg, debug=False): 
+    '''
+    Log an error before bouncing the wlan interface and then exiting as we have an unrecoverable error with the network connection
+    '''
+    import sys
+    
+    logger.log_error(error_msg)
+    adapter.bounce_wlan_interface()
+    logger.log_error("Exiting...")
+    sys.exit()   
     
 ###############################################################################
 # Main
@@ -355,33 +413,39 @@ def main():
     current_timestamp = now.strftime("%Y-%m-%d %H:%M")
         
     # get wireless info
-    adapter = WirelessAdapter(wlan_if, platform, DEBUG)
-    
+    adapter = WirelessAdapter(wlan_if, logger, platform=platform, debug=DEBUG)   
+
     # if we have no network connection (i.e. no bssid), no point in proceeding...
+    if adapter.get_wireless_info() == False:
+        error_msg = "Unable to get wireless info due to failure with ifconfig command"
+        bounce_error_exit(adapter, logger, error_msg, DEBUG) # exit here
+        
     if adapter.get_bssid() == 'NA':
-        logger.log_error("Problem with wireless connection: not associated to network")
-        logger.log_error("Attempting to recover by bouncing wireless interface...")
-        adapter.bounce_wlan_interface()
-        logger.log_error("Exiting...")
-        sys.exit()
+        error_msg = "Problem with wireless connection: not associated to network"
+        error_msg = error_msg + "Attempting to recover by bouncing wireless interface..."
+        bounce_error_exit(adapter, logger, error_msg, DEBUG) # exit here
     
     # if we have no IP address, no point in proceeding...
+    if adapter.get_adapter_ip() == False:
+        error_msg = "Unable to get wireless adapter IP info"
+        bounce_error_exit(adapter, logger, error_msg, DEBUG) # exit here
+    
+    if adapter.get_route_info() == False:
+        error_msg = "Unable to get wireless adapter route info"
+        bounce_error_exit(adapter, logger, error_msg, DEBUG) # exit here
+    
     if adapter.get_ipaddr() == 'NA':
-        logger.log_error("Problem with wireless connection: no valid IP address")
-        logger.log_error("Attempting to recover by bouncing wireless interface...")
-        adapter.bounce_wlan_interface()
-        logger.log_error("Exiting...")
-        sys.exit()
+        error_msg = "Problem with wireless connection: no valid IP address"
+        error_msg = error_msg + "Attempting to recover by bouncing wireless interface..."
+        bounce_error_exit(adapter, logger, error_msg, DEBUG) # exit here
     
     # final connectivity check: see if we can resolve an address 
     # (network connection and DNS must be up)
     try:
         gethostbyname('oauth2.googleapis.com')
     except Exception as ex:
-        logger.log_error("DNS seems to be failing, bouncing wireless interface...")
-        adapter.bounce_wlan_interface()
-        logger.log_error("Exiting...")
-        sys.exit()
+        error_msg_msg = "DNS seems to be failing, bouncing wireless interface..."
+        bounce_error_exit(adapter, logger, error_msg, DEBUG) # exit here
         
     
     # create our Google sheets object
@@ -398,19 +462,31 @@ def main():
     server_name = config_vars['server_name']
     location = config_vars['location']
     
+    # Clean up the content to get rid of whitespace
+    server_name = server_name.strip()
+    location = location.strip()
+    
+    ###########################################################################
+    # FIXEME: Server name not currently used in Speedtest function.Need to fix 
+    # this and ensure that if no server passed, uses "best" (which is diff
+    # server every time)
+    ###########################################################################
+    
     # run speedtest
     speedtest_results = ooklaspeedtest(server_name)
+    
+    if DEBUG:
+        print("Main: Speedtest results:")
+        print(speedtest_results)
     
     # hold all results in one place
     results_dict = {}
     
+    # speedtest results
     results_dict['ping_time'] = speedtest_results['ping_time']
     results_dict['download_rate'] = speedtest_results['download_rate']
     results_dict['upload_rate'] = speedtest_results['upload_rate']
     results_dict['server_name'] = speedtest_results['server_name']
-   
-    if DEBUG:
-        print(speedtest_results)
     
     results_dict['ssid'] = adapter.get_ssid()
     results_dict['bssid'] = adapter.get_bssid()
@@ -418,6 +494,189 @@ def main():
     results_dict['bit_rate'] = adapter.get_bit_rate()
     results_dict['signal_level'] = adapter.get_signal_level()
     results_dict['ip_addr'] = adapter.get_ipaddr()
+    
+    ####################################################################
+    # FIXME: Need to re-factor to remove repetitive code for ping tests 
+    #
+    # Create functions to pre-fill dict values with NA (use 
+    # dict2.update(dict2) feature to update results_dict
+    #
+    # Also, put ping process in to single function
+    #
+    ####################################################################
+    # check if we have ping 1 test defined & run test if exists
+    results_dict['ping_host1'] =  "NA"
+    results_dict['pkts_tx1'] =  "NA"
+    results_dict['pkts_rx1'] =  "NA"
+    results_dict['percent_loss1'] =  "NA"
+    results_dict['test)time1'] =  "NA"
+    results_dict['rtt_min1'] =  "NA"
+    results_dict['rtt_avg1'] =  "NA"
+    results_dict['rtt_max1'] =  "NA"
+    results_dict['rtt_mdev1'] =  "NA"
+    
+    ping_host1 = False
+    if 'ping_1' in config_vars.keys():
+        ping_host1 = config_vars['ping_1']
+        
+        # Clean up the content to get rid of whitespace
+        ping_host1 = ping_host1.strip()
+        
+        # if not in correct format, make false & register error
+        if ping_host1 == '':
+            # blank entry ignore
+            ping_host1 = False
+        elif not re.match(r"\S+\.\S+", ping_host1):            
+            logger.log_error("Error with ping host format: \'" + str(ping_host1) + "\'")
+            logger.log_error("Ping host must be IP address of resolvable hostname")
+            ping_host1 = False            
+        
+    if ping_host1:
+        
+        # check for def.gw keyword
+        if  ping_host1 == "def.gw":
+            ping_host1 = adapter.get_def_gw()
+    
+        # run 1st ping test
+        ping_obj1 = Pinger(platform = platform, debug = DEBUG)
+        
+        # initial ping to clear out arp
+        ping_obj1.ping_host(ping_host1, 1)
+        
+        # ping test
+        ping_result1 = ping_obj1.ping_host(ping_host1, 10)
+        
+        # ping1 results
+        if ping_result1:
+            results_dict['ping_host1'] =  ping_result1['host']
+            results_dict['pkts_tx1'] =  ping_result1['pkts_tx']
+            results_dict['pkts_rx1'] =  ping_result1['pkts_rx']
+            results_dict['percent_loss1'] =  ping_result1['pkt_loss']
+            results_dict['test)time1'] =  ping_result1['test_time']
+            results_dict['rtt_min1'] =  ping_result1['rtt_min']
+            results_dict['rtt_avg1'] =  ping_result1['rtt_avg']
+            results_dict['rtt_max1'] =  ping_result1['rtt_max']
+            results_dict['rtt_mdev1'] =  ping_result1['rtt_mdev']
+        
+        if DEBUG:
+            print("Main: Ping1 test results:")
+            print(ping_result1)
+    
+    # check if we have ping 2 test defined & run test if exists
+    results_dict['ping_host2'] =  "NA"
+    results_dict['pkts_tx2'] =  "NA"
+    results_dict['pkts_rx2'] =  "NA"
+    results_dict['percent_loss2'] =  "NA"
+    results_dict['test)time2'] =  "NA"
+    results_dict['rtt_min2'] =  "NA"
+    results_dict['rtt_avg2'] =  "NA"
+    results_dict['rtt_max2'] =  "NA"
+    results_dict['rtt_mdev2'] =  "NA"
+    
+    ping_host2 = False
+    if 'ping_2' in config_vars.keys():
+        ping_host2 = config_vars['ping_2']
+        
+        # Clean up the content to get rid of whitespace
+        ping_host2 = ping_host2.strip()
+        
+        # if not in correct format, make false & register error
+        if ping_host2 == '':
+            # blank entry ignore
+            ping_host2 = False
+        elif not re.match(r"\S+\.\S+", ping_host2):            
+            logger.log_error("Error with ping host format: \'" + str(ping_host2) + "\'")
+            logger.log_error("Ping host must be IP address of resolvable hostname")
+            ping_host2 = False            
+        
+    if ping_host2:
+        
+        # check for def.gw keyword
+        if  ping_host2 == "def.gw":
+            ping_host2 = adapter.get_def_gw()
+    
+        # run 2nd ping test
+        ping_obj2 = Pinger(platform = platform, debug = DEBUG)
+        
+        # initial ping to clear out arp
+        ping_obj2.ping_host(ping_host2, 1)
+        
+        # ping test
+        ping_result2 = ping_obj2.ping_host(ping_host2, 10)
+        
+        # ping2 results
+        if ping_result2:
+            results_dict['ping_host2'] =  ping_result2['host']
+            results_dict['pkts_tx2'] =  ping_result2['pkts_tx']
+            results_dict['pkts_rx2'] =  ping_result2['pkts_rx']
+            results_dict['percent_loss2'] =  ping_result2['pkt_loss']
+            results_dict['test)time2'] =  ping_result2['test_time']
+            results_dict['rtt_min2'] =  ping_result2['rtt_min']
+            results_dict['rtt_avg2'] =  ping_result2['rtt_avg']
+            results_dict['rtt_max2'] =  ping_result2['rtt_max']
+            results_dict['rtt_mdev2'] =  ping_result2['rtt_mdev']
+        
+        if DEBUG:
+            print("Main: Ping2 test results:")
+            print(ping_result2)
+
+    # check if we have ping 3 test defined & run test if exists
+    results_dict['ping_host3'] =  "NA"
+    results_dict['pkts_tx3'] =  "NA"
+    results_dict['pkts_rx3'] =  "NA"
+    results_dict['percent_loss3'] =  "NA"
+    results_dict['test)time3'] =  "NA"
+    results_dict['rtt_min3'] =  "NA"
+    results_dict['rtt_avg3'] =  "NA"
+    results_dict['rtt_max3'] =  "NA"
+    results_dict['rtt_mdev3'] =  "NA"
+            
+    ping_host3 = False
+    if 'ping_3' in config_vars.keys():
+        ping_host3 = config_vars['ping_3']
+        
+        # Clean up the content to get rid of whitespace
+        ping_host3 = ping_host3.strip()
+        
+        # if not in correct format, make false & register error
+        if ping_host3 == '':
+            # blank entry ignore
+            ping_host1 = False
+        elif not re.match(r"\S+\.\S+", ping_host3):            
+            logger.log_error("Error with ping host format: \'" + str(ping_host3) + "\'")
+            logger.log_error("Ping host must be IP address of resolvable hostname")
+            ping_host3 = False            
+        
+    if ping_host3:
+        
+        # check for def.gw keyword
+        if  ping_host3 == "def.gw":
+            ping_host3 = adapter.get_def_gw()
+    
+        # run 3rd ping test
+        ping_obj3 = Pinger(platform = platform, debug = DEBUG)
+        
+        # initial ping to clear out arp
+        ping_obj3.ping_host(ping_host3, 1)
+        
+        # ping test
+        ping_result3 = ping_obj3.ping_host(ping_host3, 10)
+        
+        # ping3 results
+        if ping_result3:
+            results_dict['ping_host3'] =  ping_result3['host']
+            results_dict['pkts_tx3'] =  ping_result3['pkts_tx']
+            results_dict['pkts_rx3'] =  ping_result3['pkts_rx']
+            results_dict['percent_loss3'] =  ping_result3['pkt_loss']
+            results_dict['test)time3'] =  ping_result3['test_time']
+            results_dict['rtt_min3'] =  ping_result3['rtt_min']
+            results_dict['rtt_avg3'] =  ping_result3['rtt_avg']
+            results_dict['rtt_max3'] =  ping_result3['rtt_max']
+            results_dict['rtt_mdev3'] =  ping_result3['rtt_mdev']
+        
+        if DEBUG:
+            print("Main: Ping3 test results:")
+            print(ping_result3)
    
     sheet_row_data = [
         current_timestamp,
@@ -432,6 +691,18 @@ def main():
         results_dict['ip_addr'],
         location,
         results_dict['server_name'],
+        results_dict['ping_host1'],
+        results_dict['pkts_tx1'],
+        results_dict['percent_loss1'],
+        results_dict['rtt_avg1'],
+        results_dict['ping_host2'],
+        results_dict['pkts_tx2'],
+        results_dict['percent_loss2'],
+        results_dict['rtt_avg2'],
+        results_dict['ping_host3'],
+        results_dict['pkts_tx3'],
+        results_dict['percent_loss3'],
+        results_dict['rtt_avg3']
     ]
     
     if DEBUG:
@@ -452,13 +723,7 @@ def main():
         # Let's check to see if we have any old cached results to push before we
         # post latest result to gspread
 
-        push_cached_results(sheet, cache_file, db_file, DEBUG)
-        
-        #if os.path.exists(cache_file):
-        
-            # If successful, remove cache file
-            #if push_cached_results(sheet, cache_file, db_file, DEBUG) == #True:
-            #    os.remove(cache_file)
+        push_cached_results(sheet, cache_file, db_file, logger, DEBUG)
     
         # post latest result to worksheet    
         append_result = sheet.append_row(sheet_row_data)

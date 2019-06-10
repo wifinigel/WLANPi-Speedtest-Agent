@@ -5,11 +5,12 @@ class WirelessAdapter(object):
     A class to monitor and manipulate the wireless adapter for the WLANPerfAgent
     '''
 
-    def __init__(self, wlan_if_name, platform="rpi", debug=False):
+    def __init__(self, wlan_if_name, logger, platform="rpi", debug=False):
     
-        import subprocess
+        import sys
         
         self.wlan_if_name = wlan_if_name
+        self.logger = logger
         self.platform = platform
         self.debug = debug
         
@@ -20,21 +21,12 @@ class WirelessAdapter(object):
         self.signal_level = ''
         
         self.ip_addr = ''
-        
-        # Get wireless adapter info
-        self.ifconfig_info = subprocess.check_output("/sbin/ifconfig " + self.wlan_if_name + " 2>&1", shell=True)
-
-        if self.debug:
-            print("Interface config info: " + self.ifconfig_info)
-
-        self.iwconfig_info = subprocess.check_output("/sbin/iwconfig " + self.wlan_if_name + " 2>&1", shell=True)
-        
-        if self.debug:
-            print(self.iwconfig_info)
+        self.def_gw = ''
         
         # fire off methods to pre-load all adapter attributes
-        self.get_wireless_info()
-        self.get_adapter_ip()
+        #self.get_wireless_info()
+        #self.get_adapter_ip()
+        #self.get_route_info()
 
     def get_wireless_info(self):
 
@@ -51,6 +43,25 @@ class WirelessAdapter(object):
 
         '''
         import re
+        import subprocess
+        
+        # Get wireless interface IP address info
+        try:
+            self.iwconfig_info = subprocess.check_output("/sbin/iwconfig " + self.wlan_if_name + " 2>&1", shell=True)
+        except Exception as ex:
+            error_descr = "Issue getting interface info using iwconfig command"
+            if self.debug:
+                print(error_descr)
+                print(ex)
+            
+            self.logger.log_error(error_descr)
+            self.logger.log_error(ex)
+            self.logger.log_error("Returning error...")
+            return False
+            
+        if self.debug:
+            print("Wireless interface config info: ")
+            print(self.iwconfig_info)
         
         # Extract SSID
         ssid_re = re.search('ESSID\:\"(.*?)\"', self.iwconfig_info)
@@ -60,7 +71,7 @@ class WirelessAdapter(object):
             self.ssid = ssid_re.group(1)
         
         if self.debug:
-            print(self.ssid)
+            print("SSID = " + self.ssid)
         
         # Extract BSSID (Note that if WLAN adapter not associated, "Access Point: Not-Associated")
         ssid_re = re.search('Access Point[\=|\:] (..\:..\:..\:..\:..\:..)', self.iwconfig_info)
@@ -70,7 +81,7 @@ class WirelessAdapter(object):
             self.bssid = ssid_re.group(1)
         
         if self.debug:
-            print(self.bssid)
+            print("BSSID = " + self.bssid)
         
         # Extract Frequency
         ssid_re = re.search('Frequency[\:|\=](\d+\.\d+) ', self.iwconfig_info)
@@ -80,7 +91,7 @@ class WirelessAdapter(object):
             self.freq = ssid_re.group(1)
         
         if self.debug:
-            print(self.freq)
+            print("Frequency = " + self.freq)
         
         # Extract Bit Rate (e.g. Bit Rate=144.4 Mb/s)
         ssid_re = re.search('Bit Rate[\=|\:]([\d|\.]+) ', self.iwconfig_info)
@@ -90,7 +101,7 @@ class WirelessAdapter(object):
             self.bit_rate = ssid_re.group(1)
         
         if self.debug:
-            print(self.bit_rate)
+            print("Bit rate: " + self.bit_rate)
         
         
         # Extract Signal Level
@@ -101,7 +112,7 @@ class WirelessAdapter(object):
             self.signal_level = ssid_re.group(1)
             
         if self.debug:
-            print(self.signal_level)
+            print("Signal level = " + self.signal_level)
         
         return [self.ssid, self.bssid, self.freq, self.bit_rate, self.signal_level]
 
@@ -116,6 +127,25 @@ class WirelessAdapter(object):
         '''
         
         import re
+        import subprocess
+        
+        # Get interface info
+        try:            
+            self.ifconfig_info = subprocess.check_output("/sbin/ifconfig " + str(self.wlan_if_name) + " 2>&1", shell=True)
+        except Exception as ex:
+            error_descr = "Issue getting interface info using ifconfig command"
+            if self.debug:
+                print(error_descr)
+                print(ex)
+            
+            self.logger.log_error(error_descr)
+            self.logger.log_error(ex)
+            self.logger.log_error("Return error...")
+            return False
+
+        if self.debug:
+            print("Interface config info: ")
+            print(self.ifconfig_info)
         
         # Extract IP address info (e.g. inet 10.255.250.157)
         ip_re = re.search('inet .*?(\d+\.\d+\.\d+\.\d+)', self.ifconfig_info)
@@ -130,9 +160,49 @@ class WirelessAdapter(object):
             self.ip_addr = "NA"
         
         if self.debug:
-            print(self.ip_addr)
+            print("IP Address = " + self.ip_addr)
         
         return self.ip_addr
+    
+    def get_route_info(self):
+        '''
+        This method parses the output of the route command to figure out the
+        IP address of the wireless adapter default gateway.
+        
+        As this is a wrapper around a CLI command, it is likely to break at
+        some stage
+        '''
+    
+        import re
+        import subprocess
+        
+        # Get route info (used too figure out default gateway)
+        try:
+            self.route_info = subprocess.check_output("/sbin/route -n | grep ^0.0.0.0 | grep " + self.wlan_if_name + " 2>&1", shell=True)
+        except Exception as ex:
+            error_descr = "Issue getting default gateway info using route command"
+            if self.debug:
+                print(error_descr)
+                print(ex)
+            
+            self.logger.log_error(error_descr)
+            self.logger.log_error(ex)
+            self.logger.log_error("Returning error...")
+            return False
+        
+        if self.debug:
+            print("Route info:")
+            print(self.route_info)
+        
+        # Extract SSID
+        def_gw_re = re.search('0\.0\.0\.0\s+(\d+\.\d+\.\d+\.\d+)\s', self.route_info)
+        if def_gw_re is None:
+            self.def_gw = "NA"
+        else:            
+            self.def_gw = def_gw_re.group(1)
+        
+        if self.debug:
+            print("Default GW = " + self.def_gw)        
 
     def bounce_wlan_interface(self):
     
@@ -147,14 +217,65 @@ class WirelessAdapter(object):
         if self.debug:
             print("Bouncing interface (platform type = " + self.platform + ")")
         
-        if self.platform == 'wlanpi':
-            subprocess.call("nmcli radio wifi off", shell=True)
-            subprocess.call("nmcli radio wifi on", shell=True)
+        self.logger.log_error("Bouncing interface (platform type = " + self.platform + ")")
+        
+        if_down_cmd = "sudo ifdown " + str(self.wlan_if_name)
+        
+        
+        if self.debug:
+            print("if down command:")
+            print(if_down_cmd)
 
-        elif self.platform == 'rpi':
-            subprocess.call("sudo ifdown " + self.wlan_if_name, shell=True)
-            subprocess.call("sudo ifup " + self.wlan_if_name, shell=True)
-
+        try:        
+            if_down = subprocess.check_output(if_down_cmd, stderr=subprocess.STDOUT, shell=True)
+        except Exception as ex:
+            error_descr = "ifdown command appears to have failed"
+            if self.debug:
+                print(error_descr)
+                print(ex)
+            
+            self.logger.log_error(error_descr)
+            self.logger.log_error(ex)
+            self.logger.log_error("Returning error...")
+            return False
+        
+        if self.debug:
+            print("")
+            print("Output of ifdown command: ")
+            print (if_down)
+            
+        self.logger.log_error("sudo ifdown output: " + str(if_down))
+        
+        # have a sleep to allow time for wpa_supplicant to exit?
+        import time
+        time.sleep(5)
+        
+        if_up_cmd = "sudo ifup " + str(self.wlan_if_name)
+        
+        if self.debug:
+            print("if up command:")
+            print(if_up_cmd)
+            
+        try:
+            if_up = subprocess.check_output(if_up_cmd, stderr=subprocess.STDOUT, shell=True)
+        except Exception as ex:
+            error_descr = "ifup command appears to have failed"
+            if self.debug:
+                print(error_descr)
+                print(ex)
+            
+            self.logger.log_error(error_descr)
+            self.logger.log_error(ex)
+            self.logger.log_error("Returning error...")
+            return False
+        
+        if self.debug:
+            print("Output of ifup command: ")
+            print (if_up)
+            
+        self.logger.log_error("sudo ifup output: " + str(if_up))
+        
+        return True
 
     def get_ssid(self):
         return self.ssid
@@ -173,3 +294,6 @@ class WirelessAdapter(object):
 
     def get_ipaddr(self):
         return self.ip_addr
+    
+    def get_def_gw(self):
+        return self.def_gw

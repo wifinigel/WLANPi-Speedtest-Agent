@@ -73,7 +73,7 @@ class Gsheet(object):
                 self.logger_obj.log_error("Error adding new worksheet: " + str(ex))
                 return False
             
-            col_headers = ["timestamp","ping_time (ms)","download_rate (mbps)","upload_rate (mbps)", "ssid","bssid","freq","bit_rate","signal_level","ip_address","location","speedtest_server"]
+            col_headers = ["timestamp","ping_time (ms)","download_rate (mbps)","upload_rate (mbps)", "ssid","bssid","freq","bit_rate","signal_level","ip_address","location","speedtest_server","ping_host1","pkts_tx1","percent_loss1","rtt_avg1","ping_host2","pkts_tx2","percent_loss2","rtt_avg2","ping_host3","pkts_tx3","percent_loss3","rtt_avg3"]
             
             try:
                 append_result = worksheet.append_row(col_headers)
